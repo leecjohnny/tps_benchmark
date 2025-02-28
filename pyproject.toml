@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm_benchmark"
+version = "0.1.0"
+description = "A tool for benchmarking different LLM providers"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+dependencies = [
+    "requests>=2.32.0",
+    "pandas>=2.2.0",
+    "python-dotenv>=1.0.0",
+    "aiohttp>=3.11.13",
+    "tenacity>=9.0.0",
+    "tqdm>=4.67.1",
+]
+
+[tool.setuptools.packages.find]
+where = ["llm_benchmark"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.1.0",
+    "types-requests>=2.32.0.20241016",
+    "pandas-stubs>=2.2.3.241126",
+    "types-tqdm>=4.67.0.20250228",
+]
