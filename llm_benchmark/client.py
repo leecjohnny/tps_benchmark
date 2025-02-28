@@ -94,7 +94,7 @@ class LLMClient(ABC):
 class CloudflareGatewayClient(LLMClient):
     """Client for accessing LLM providers through the Cloudflare AI Gateway."""
 
-    def __init__(self, config: ProviderConfig):
+    def __init__(self, config: ProviderConfig, run_id: str):
         """
         Initialize the client with a provider configuration.
 
@@ -102,9 +102,9 @@ class CloudflareGatewayClient(LLMClient):
             config: The provider configuration.
         """
         super().__init__(config)
-        self.account_id = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
-        self.gateway_id = os.environ.get("CLOUDFLARE_GATEWAY_ID")
-
+        self.account_id = os.environ["CLOUDFLARE_ACCOUNT_ID"]
+        self.gateway_id = os.environ["CLOUDFLARE_GATEWAY_ID"]
+        self.run_id = run_id
         if not self.account_id or not self.gateway_id:
             raise ValueError(
                 "CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_GATEWAY_ID environment variables must be set"
@@ -171,6 +171,9 @@ class CloudflareGatewayClient(LLMClient):
         headers = {
             auth_header_key: auth_header_value,
             "Content-Type": "application/json",
+            "cf-aig-metadata": {
+                "run_id": self.run_id,
+            },
         }
 
         # Add Anthropic-specific header if needed
@@ -427,7 +430,7 @@ class MistralClient(CloudflareGatewayClient):
 
 
 # Client factory
-def get_client(config: ProviderConfig) -> LLMClient:
+def get_client(config: ProviderConfig, run_id: str) -> LLMClient:
     """
     Get the appropriate client for the given provider configuration.
 
@@ -450,4 +453,4 @@ def get_client(config: ProviderConfig) -> LLMClient:
     if not client_class:
         raise ValueError(f"No client implementation for provider: {config.name}")
 
-    return client_class(config)
+    return client_class(config, run_id)

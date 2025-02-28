@@ -7,9 +7,10 @@ import logging
 import os
 import secrets
 import statistics
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Coroutine, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 
@@ -59,7 +60,7 @@ class BenchmarkRunner:
 
         # Set up logging to file and console
         self._setup_logging()
-
+        self.run_id = str(uuid.uuid4())
         # Create a DataFrame for request/response logging
         self.requests_log = pd.DataFrame(
             columns=[
@@ -331,44 +332,6 @@ class BenchmarkRunner:
         logger.info(f"Full request logs saved to: {final_log_file}")
 
         return self.results
-
-    def run(
-        self,
-        attempts: int = 100,
-        prompt_mode: str = "decode",
-        max_tokens: Optional[int] = None,
-    ) -> Union[
-        Dict[str, BenchmarkResult], Coroutine[Any, Any, Dict[str, BenchmarkResult]]
-    ]:
-        """
-        Run benchmarks for all configured providers.
-
-        Args:
-            attempts: Number of API calls to make per provider.
-            prompt_mode: The prompt mode to use. Options are:
-                - "decode": The standard decoding prompt (default)
-                - "simple": A simple "hi!" prompt
-            max_tokens: Maximum number of tokens to generate (if supported by the provider).
-
-        Returns:
-            Dictionary mapping provider names to benchmark results,
-            or a coroutine that will return such a dictionary when awaited.
-        """
-        # Check if we're already in an event loop
-        try:
-            asyncio.get_running_loop()
-            # If we're already in an event loop, we can't use asyncio.run
-            # This is likely being called from an async context, so just run the async version
-            logger.warning(
-                "run() called from within an event loop - use run_async() instead"
-            )
-            return self.run_async(
-                attempts, prompt_mode, max_tokens
-            )  # This will return a coroutine that must be awaited
-        except RuntimeError:
-            # If we're not in an event loop, create a new one
-            logger.debug("No event loop running, creating a new one")
-            return asyncio.run(self.run_async(attempts, prompt_mode, max_tokens))
 
     def print_results(self):
         """Print a summary of benchmark results to the console."""
