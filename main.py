@@ -5,7 +5,6 @@ Main entry point for the LLM benchmarking tool.
 import argparse
 import asyncio
 import os
-import sys
 
 from dotenv import load_dotenv
 
@@ -29,17 +28,11 @@ def parse_args():
     parser.add_argument(
         "--attempts",
         type=int,
-        default=int(os.environ.get("BENCHMARK_ATTEMPTS", "100")),
-        help="Number of API calls to make per provider (default: 100)",
+        default=int(os.environ["BENCHMARK_ATTEMPTS"]),
+        help="Number of API calls to make per provider (default set to BENCHMARK_ATTEMPTS environment variable)",
     )
 
     provider_group = parser.add_mutually_exclusive_group()
-    provider_group.add_argument(
-        "--providers",
-        type=str,
-        nargs="+",
-        help="Specific providers to benchmark (default: one model from each provider)",
-    )
 
     provider_group.add_argument(
         "--all-openai",
@@ -144,28 +137,6 @@ async def async_main():
     elif args.all_mistral:
         providers = ALL_MISTRAL_MODELS
         print(f"Benchmarking all {len(providers)} Mistral models")
-    elif args.providers:
-        # Filter by provider name
-        available_providers = {p.name: p for p in DEFAULT_PROVIDERS}
-        selected_providers = []
-
-        for name in args.providers:
-            if name in available_providers:
-                selected_providers.append(available_providers[name])
-            else:
-                print(
-                    f"Warning: Provider '{name}' not found. Available providers: {list(available_providers.keys())}"
-                )
-
-        if not selected_providers:
-            print(
-                f"Error: No valid providers found. Available providers: {list(available_providers.keys())}"
-            )
-            sys.exit(1)
-
-        providers = selected_providers
-        print(f"Benchmarking {len(providers)} selected providers")
-
     # Run benchmarks
     runner = BenchmarkRunner(providers=providers)
 
@@ -184,9 +155,6 @@ async def async_main():
         prompt_mode=args.prompt_mode,
         max_tokens=args.max_tokens,
     )
-
-    # Print the results
-    runner.print_results()
 
 
 def main():

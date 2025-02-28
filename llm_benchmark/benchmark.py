@@ -276,17 +276,3 @@ class BenchmarkRunner:
         df.to_csv(final_csv_file, index=False)
         logger.info(f"Full request logs saved to: {final_csv_file}")
         return df
-
-    def print_results(self):
-        """Print a summary of benchmark results to the console."""
-        if not self.results:
-            logger.warning("No benchmark results to print")
-            return
-
-        logger.info("\nBenchmark Results:")
-        for result in self.results:
-            logger.info(f"{result.provider_name}:")
-            logger.info(f"  Average TPS: {result.average_tps:.2f}")
-            logger.info(f"  Median TPS: {result.median_tps:.2f}")
-            logger.info(f"  Total tokens: {result.total_tokens}")
-            logger.info(f"  Total elapsed: {result.total_elapsed:.2f}s")
