@@ -190,7 +190,7 @@ class CloudflareGatewayClient(LLMClient):
         }
         payload = [message]  # Universal endpoint expects an array of messages
 
-        logger.info(f"Calling {self.name} API...")
+        logger.debug(f"Calling {self.name} API...")
         logger.debug(f"Request payload: {json.dumps(payload)}")
 
         start_time = time.time()
@@ -198,11 +198,13 @@ class CloudflareGatewayClient(LLMClient):
 
         @tenacity.retry(
             retry=tenacity.retry_if_exception_type(aiohttp.ClientResponseError),
-            wait=tenacity.wait_exponential(multiplier=1, min=2, max=10),
-            stop=tenacity.stop_after_attempt(3),
+            wait=tenacity.wait_exponential_jitter(initial=1, max=30, exp_base=2),
+            stop=tenacity.stop_after_attempt(12) | tenacity.stop_after_delay(180),
             retry_error_callback=lambda retry_state: retry_state.outcome.result(),  # type: ignore
             before_sleep=lambda retry_state: logger.info(
-                f"Rate limited or server error ({retry_state.outcome.exception().status}). Retrying in {retry_state.next_action.sleep} seconds..."  # type: ignore
+                f"Rate limited or server error ({retry_state.outcome.exception().status}). "  # type: ignore
+                f"Retrying in {retry_state.next_action.sleep} seconds... "  # type: ignore
+                f"({retry_state.attempt_number}/12) retries remaining"  # type: ignore
             ),
         )
         async def make_request():
@@ -211,7 +213,7 @@ class CloudflareGatewayClient(LLMClient):
                     status_code = response.status
                     response_text = await response.text()
 
-                    if status_code == 429 or status_code == 500:
+                    if status_code in (529, 500, 429, 502):
                         # Raise an exception that will trigger the retry
                         raise aiohttp.ClientResponseError(
                             request_info=None,
@@ -253,23 +255,9 @@ class CloudflareGatewayClient(LLMClient):
             response_data = {"status_code": 500, "response_text": str(e)}
 
         elapsed = time.time() - start_time
-        logger.info(f"API call completed in {elapsed:.2f} seconds")
+        logger.debug(f"API call completed in {elapsed:.2f} seconds")
 
         return response_data, elapsed
-
-    def extract_text(self, response: Dict[str, Any]) -> str:
-        """Extract generated text from a Cloudflare Gateway response."""
-        raise NotImplementedError("Cloudflare Gateway does not support text extraction")
-
-    def extract_detailed_token_counts(self, response: Dict[str, Any]) -> Dict[str, int]:
-        """Extract detailed token counts from a Cloudflare Gateway response."""
-        raise NotImplementedError(
-            "Cloudflare Gateway does not support detailed token counts extraction"
-        )
-
-
-class OpenAIClient(CloudflareGatewayClient):
-    """Client for OpenAI API."""
 
     def extract_text(self, response: Dict[str, Any]) -> str:
         """Extract generated text from an OpenAI response."""
@@ -290,7 +278,11 @@ class OpenAIClient(CloudflareGatewayClient):
                 "Failed to extract detailed token counts from OpenAI response"
             )
             logger.debug(f"Response structure: {json.dumps(response)}")
-            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            raise ValueError("Failed to extract detailed token counts from response")
+
+
+class OpenAIClient(CloudflareGatewayClient):
+    """Client for OpenAI API."""
 
 
 class AnthropicClient(CloudflareGatewayClient):
@@ -310,10 +302,14 @@ class AnthropicClient(CloudflareGatewayClient):
 
         try:
             anthropic_response = response["usage"]
-            anthropic_response["total_tokens"] = anthropic_response.get(
-                "input_tokens", 0
-            ) + anthropic_response.get("output_tokens", 0)
-            return anthropic_response
+            prompt_tokens = anthropic_response.get("input_tokens", 0)
+            completion_tokens = anthropic_response.get("output_tokens", 0)
+            total_tokens = prompt_tokens + completion_tokens
+            return {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+            }
         except (KeyError, TypeError):
             logger.warning(
                 "Failed to extract detailed token counts from Anthropic response"
@@ -346,9 +342,9 @@ class GoogleVertexClient(CloudflareGatewayClient):
         try:
             usage_metadata = response["usageMetadata"]
             return {
-                "prompt_tokens": usage_metadata.get("promptTokenCount", 0),
-                "completion_tokens": usage_metadata.get("completionTokenCount", 0),
-                "total_tokens": usage_metadata.get("totalTokenCount", 0),
+                "prompt_tokens": usage_metadata["promptTokenCount"],
+                "completion_tokens": usage_metadata["candidatesTokenCount"],
+                "total_tokens": usage_metadata["totalTokenCount"],
             }
         except (KeyError, TypeError):
             logger.warning(
@@ -360,26 +356,6 @@ class GoogleVertexClient(CloudflareGatewayClient):
 
 class DeepseekClient(CloudflareGatewayClient):
     """Client for Deepseek API."""
-
-    def extract_text(self, response: Dict[str, Any]) -> str:
-        """Extract generated text from a Deepseek response."""
-        try:
-            return response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError):
-            logger.warning("Failed to extract text from Deepseek response")
-            logger.debug(f"Response structure: {json.dumps(response)}")
-            return ""
-
-    def extract_detailed_token_counts(self, response: Dict[str, Any]) -> Dict[str, int]:
-        """Extract detailed token counts from a Deepseek response."""
-        try:
-            return response["usage"]
-        except (KeyError, TypeError):
-            logger.warning(
-                "Failed to extract detailed token counts from Deepseek response"
-            )
-            logger.debug(f"Response structure: {json.dumps(response)}")
-            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
 class WorkersAIClient(CloudflareGatewayClient):
@@ -404,31 +380,11 @@ class WorkersAIClient(CloudflareGatewayClient):
                 "Failed to extract detailed token counts from Workers AI response"
             )
             logger.debug(f"Response structure: {json.dumps(response)}")
-            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            raise ValueError("Failed to extract detailed token counts from response")
 
 
 class MistralClient(CloudflareGatewayClient):
     """Client for Mistral API."""
-
-    def extract_text(self, response: Dict[str, Any]) -> str:
-        """Extract generated text from a Mistral response."""
-        try:
-            return response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError):
-            logger.warning("Failed to extract text from Mistral response")
-            logger.debug(f"Response structure: {json.dumps(response)}")
-            return ""
-
-    def extract_detailed_token_counts(self, response: Dict[str, Any]) -> Dict[str, int]:
-        """Extract detailed token counts from a Mistral response."""
-        try:
-            return response["usage"]
-        except (KeyError, TypeError):
-            logger.warning(
-                "Failed to extract detailed token counts from Mistral response"
-            )
-            logger.debug(f"Response structure: {json.dumps(response)}")
-            return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
 # Client factory

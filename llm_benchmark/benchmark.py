@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
+from tqdm.asyncio import tqdm
 
 from llm_benchmark.client import LLMClient, get_client
 from llm_benchmark.models import ProviderConfig
@@ -48,7 +49,7 @@ class BenchmarkRunner:
                 If None, uses the default providers.
         """
         self.providers = providers
-        self.results: Dict[str, BenchmarkResult] = {}
+        self.results: List[BenchmarkResult] = []
 
         # Set up logging to file and console
         self._setup_logging()
@@ -157,7 +158,7 @@ class BenchmarkRunner:
             A BenchmarkResult with performance statistics.
         """
         provider_name = client.name
-        logger.info(f"Benchmarking {provider_name} with {attempts} attempts...")
+        model_name = client.config.model
 
         tps_results = []
         all_token_details = []
@@ -169,9 +170,11 @@ class BenchmarkRunner:
         for i in range(attempts):
             tasks.append(client.call_async(prompt, max_tokens=max_tokens))
 
-        # Run all attempts concurrently
-        logger.info(f"Running {attempts} attempts concurrently for {provider_name}")
-        responses = await asyncio.gather(*tasks)
+        responses = []
+        for f in tqdm.as_completed(
+            tasks, total=len(tasks), desc=f"Benchmarking {provider_name} {model_name}"
+        ):
+            responses.append(await f)
 
         # Process results
         for i, (response_data, elapsed) in enumerate(responses):
@@ -189,7 +192,7 @@ class BenchmarkRunner:
 
             # Track token counts
             token_counts.append(output_token_counts)
-            logger.info(
+            logger.debug(
                 f"Attempt {i + 1} completed: {output_token_counts} tokens in {elapsed:.2f}s"
             )
 
@@ -206,11 +209,6 @@ class BenchmarkRunner:
             elapsed_times=elapsed_times,
         )
 
-        logger.info(f"Benchmark completed for {provider_name}")
-        logger.info(f"Average TPS: {result.average_tps:.2f}")
-        logger.info(f"Median TPS: {result.median_tps:.2f}")
-        logger.info(f"Total tokens: {result.total_tokens}")
-        logger.info(f"Total elapsed: {result.total_elapsed:.2f}s")
         return result
 
     async def run_async(
@@ -218,7 +216,7 @@ class BenchmarkRunner:
         attempts: int,
         prompt_mode: str = "decode",
         max_tokens: Optional[int] = None,
-    ) -> Dict[str, BenchmarkResult]:
+    ) -> pd.DataFrame:
         """
         Run benchmarks for all configured providers asynchronously.
 
@@ -230,7 +228,7 @@ class BenchmarkRunner:
             max_tokens: Maximum number of tokens to generate (if supported by the provider).
 
         Returns:
-            Dictionary mapping provider names to benchmark results.
+            DataFrame with benchmark results.
         """
         logger.info(f"Starting benchmark run with {attempts} attempts per provider")
 
@@ -270,14 +268,14 @@ class BenchmarkRunner:
             else:
                 # Cast the result to BenchmarkResult since we've checked it's not an exception
                 benchmark_result = cast(BenchmarkResult, result)
-                output_results.append(asdict(benchmark_result))
-
+                output_results.append(benchmark_result)
+        self.results = output_results
         # Save final combined log
         final_csv_file = f"data/results/all_requests_log_{self.run_id}.csv"
-        pd.DataFrame(output_results).to_csv(final_csv_file, index=False)
+        df = pd.DataFrame([asdict(result) for result in output_results])
+        df.to_csv(final_csv_file, index=False)
         logger.info(f"Full request logs saved to: {final_csv_file}")
-
-        return self.results
+        return df
 
     def print_results(self):
         """Print a summary of benchmark results to the console."""
@@ -286,9 +284,9 @@ class BenchmarkRunner:
             return
 
         logger.info("\nBenchmark Results:")
-        for provider_name, result in self.results.items():
-            logger.info(f"{provider_name}:")
+        for result in self.results:
+            logger.info(f"{result.provider_name}:")
             logger.info(f"  Average TPS: {result.average_tps:.2f}")
             logger.info(f"  Median TPS: {result.median_tps:.2f}")
-            logger.info(f"  Average Tokens: {result.average_tokens:.2f}")
-            logger.info("")
+            logger.info(f"  Total tokens: {result.total_tokens}")
+            logger.info(f"  Total elapsed: {result.total_elapsed:.2f}s")
