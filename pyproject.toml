@@ -17,9 +17,6 @@ dependencies = [
     "tenacity>=9.0.0",
 ]
 
-[project.scripts]
-llm-benchmark = "llm_benchmark.__main__:main"
-
 [tool.setuptools.packages.find]
 where = ["llm_benchmark"]
 

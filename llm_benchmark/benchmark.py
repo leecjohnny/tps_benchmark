@@ -8,14 +8,14 @@ import os
 import secrets
 import statistics
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, cast
 
 import pandas as pd
 
 from llm_benchmark.client import LLMClient, get_client
-from llm_benchmark.models import DEFAULT_PROVIDERS, ProviderConfig
+from llm_benchmark.models import ProviderConfig
 
 # Set up logging
 logger = logging.getLogger("llm_benchmark")
@@ -26,28 +26,20 @@ class BenchmarkResult:
     """Results of a benchmark run for a single provider."""
 
     provider_name: str
-    """Name of the provider."""
-
+    model_name: str
+    run_id: str
     average_tps: float
-    """Average tokens per second."""
-
     median_tps: float
-    """Median tokens per second."""
-
-    average_tokens: float
-    """Average number of tokens generated."""
-
+    total_tokens: int
+    total_elapsed: float
     token_details: List[Dict[str, Any]]
-    """Detailed token information for each call."""
-
     elapsed_times: List[float]
-    """Elapsed time for each call."""
 
 
 class BenchmarkRunner:
     """Runner for LLM benchmarks."""
 
-    def __init__(self, providers: Optional[List[ProviderConfig]] = None):
+    def __init__(self, providers: List[ProviderConfig]):
         """
         Initialize the benchmark runner.
 
@@ -55,25 +47,13 @@ class BenchmarkRunner:
             providers: List of provider configurations to benchmark.
                 If None, uses the default providers.
         """
-        self.providers = providers or DEFAULT_PROVIDERS
+        self.providers = providers
         self.results: Dict[str, BenchmarkResult] = {}
 
         # Set up logging to file and console
         self._setup_logging()
         self.run_id = str(uuid.uuid4())
-        # Create a DataFrame for request/response logging
-        self.requests_log = pd.DataFrame(
-            columns=[
-                "timestamp",
-                "provider",
-                "endpoint",
-                "request_payload",
-                "status_code",
-                "response_time",
-                "response_json",
-                "error",
-            ]
-        )
+        logger.info(f"Run ID: {self.run_id}")
 
     def _setup_logging(self):
         """Set up logging configuration."""
@@ -184,18 +164,22 @@ class BenchmarkRunner:
         elapsed_times = []
         token_counts = []
 
+        # Create tasks for all attempts
+        tasks = []
         for i in range(attempts):
-            logger.info(f"Attempt {i + 1}/{attempts} for {provider_name}")
+            tasks.append(client.call_async(prompt, max_tokens=max_tokens))
 
-            # Call the API
-            response_data, elapsed = await client.call_async(
-                prompt, max_tokens=max_tokens
-            )
+        # Run all attempts concurrently
+        logger.info(f"Running {attempts} attempts concurrently for {provider_name}")
+        responses = await asyncio.gather(*tasks)
+
+        # Process results
+        for i, (response_data, elapsed) in enumerate(responses):
             elapsed_times.append(elapsed)
 
             # Get detailed token counts
             token_counts_dict = client.extract_detailed_token_counts(response_data)
-            output_token_counts = token_counts_dict["total_tokens"]
+            output_token_counts = token_counts_dict["completion_tokens"]
 
             all_token_details.append(token_counts_dict)
 
@@ -212,9 +196,12 @@ class BenchmarkRunner:
         # Calculate statistics
         result = BenchmarkResult(
             provider_name=provider_name,
+            model_name=client.config.model,
+            run_id=self.run_id,
             average_tps=statistics.mean(tps_results),
             median_tps=statistics.median(tps_results),
-            average_tokens=statistics.mean(token_counts),
+            total_tokens=sum(token_counts),
+            total_elapsed=sum(elapsed_times),
             token_details=all_token_details,
             elapsed_times=elapsed_times,
         )
@@ -222,48 +209,13 @@ class BenchmarkRunner:
         logger.info(f"Benchmark completed for {provider_name}")
         logger.info(f"Average TPS: {result.average_tps:.2f}")
         logger.info(f"Median TPS: {result.median_tps:.2f}")
-        logger.info(f"Average tokens: {result.average_tokens:.2f}")
-
+        logger.info(f"Total tokens: {result.total_tokens}")
+        logger.info(f"Total elapsed: {result.total_elapsed:.2f}s")
         return result
-
-    def benchmark_provider(
-        self, client: LLMClient, prompt: str, attempts: int = 100
-    ) -> BenchmarkResult:
-        """
-        Synchronous wrapper for benchmark_provider_async.
-
-        Args:
-            client: The LLM client to use.
-            prompt: The prompt string to use for each attempt.
-            attempts: Number of attempts.
-
-        Returns:
-            A BenchmarkResult with performance statistics.
-        """
-        return asyncio.run(self.benchmark_provider_async(client, prompt, attempts))
-
-    def save_log_to_csv(self, filename: Optional[str] = None) -> str:
-        """
-        Save the requests log DataFrame to a CSV file.
-
-        Args:
-            filename: Optional custom filename. If None, a timestamped filename is generated.
-
-        Returns:
-            The filename where the log was saved.
-        """
-        if filename is None:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"data/logs/api_requests_log_{timestamp}.csv"
-
-        # Save the DataFrame to CSV
-        self.requests_log.to_csv(filename, index=False)
-        logger.info(f"Saved request log to {filename}")
-        return filename
 
     async def run_async(
         self,
-        attempts: int = 100,
+        attempts: int,
         prompt_mode: str = "decode",
         max_tokens: Optional[int] = None,
     ) -> Dict[str, BenchmarkResult]:
@@ -295,14 +247,12 @@ class BenchmarkRunner:
 
         # Run benchmarks for each provider
         tasks = []
-        provider_names = []
         for provider_config in self.providers:
             try:
-                client = get_client(provider_config)
+                client = get_client(provider_config, self.run_id)
                 tasks.append(
                     self.benchmark_provider_async(client, prompt, attempts, max_tokens)
                 )
-                provider_names.append(provider_config.name)
             except Exception as e:
                 logger.error(
                     f"Error setting up benchmark for {provider_config.name}: {str(e)}"
@@ -311,25 +261,21 @@ class BenchmarkRunner:
         # Wait for all benchmarks to complete
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Process results
+        output_results = []
         for i, result in enumerate(results):
-            provider_name = provider_names[i]
             if isinstance(result, Exception):
-                logger.error(f"Error benchmarking {provider_name}: {str(result)}")
+                logger.error(
+                    f"Error benchmarking {self.providers[i].name}: {str(result)}"
+                )
             else:
                 # Cast the result to BenchmarkResult since we've checked it's not an exception
                 benchmark_result = cast(BenchmarkResult, result)
-                self.results[provider_name] = benchmark_result
-
-                # Save logs after each provider to prevent data loss
-                log_file = self.save_log_to_csv(
-                    f"data/results/{provider_name}_requests_log.csv"
-                )
-                logger.info(f"Request logs saved to: {log_file}")
+                output_results.append(asdict(benchmark_result))
 
         # Save final combined log
-        final_log_file = self.save_log_to_csv("data/results/all_requests_log.csv")
-        logger.info(f"Full request logs saved to: {final_log_file}")
+        final_csv_file = f"data/results/all_requests_log_{self.run_id}.csv"
+        pd.DataFrame(output_results).to_csv(final_csv_file, index=False)
+        logger.info(f"Full request logs saved to: {final_csv_file}")
 
         return self.results
 

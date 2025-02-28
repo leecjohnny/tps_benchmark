@@ -22,7 +22,7 @@ class ProviderConfig:
     model: str
     """The model identifier to use."""
 
-    max_tokens: int = 1024
+    max_tokens: int = 512
     """Maximum number of tokens to generate."""
 
     def create_request_payload(self, prompt: str) -> Dict[str, Any]:
