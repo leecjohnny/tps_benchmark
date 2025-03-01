@@ -5,14 +5,13 @@ Benchmarking functionality for LLM providers.
 import asyncio
 import logging
 import os
+import random
 import secrets
-import statistics
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional
 
-import pandas as pd
 from tqdm.asyncio import tqdm
 
 from llm_benchmark.client import LLMClient, get_client
@@ -88,7 +87,7 @@ class BenchmarkRunner:
         """
         Generate a prompt that includes a list of integers representing a UTF-8 encoded string.
 
-        Creates a 4000-character random string (using hex digits), encodes it to bytes,
+        Creates a N-character random string (using hex digits), encodes it to bytes,
         converts to a list of ints, and instructs the model to write Python code that
         decodes this list back into the original string.
 
@@ -97,8 +96,7 @@ class BenchmarkRunner:
         """
         logger.info("Generating decoding prompt...")
 
-        # Generate 2000 random bytes as hex -> 4000 hex characters.
-        random_string = secrets.token_hex(2000)
+        random_string = secrets.token_hex(500)
         byte_list = list(random_string.encode("utf-8"))
         prompt = (
             "You are given a list of integers representing the UTF-8 encoded bytes of a string. "
@@ -142,9 +140,9 @@ class BenchmarkRunner:
         self,
         client: LLMClient,
         prompt: str,
-        attempts: int = 100,
+        attempts: int,
         max_tokens: Optional[int] = None,
-    ) -> BenchmarkResult:
+    ) -> List[Dict[str, Any]]:
         """
         Benchmark a given provider by repeatedly calling the API and measuring tokens per second.
 
@@ -159,12 +157,6 @@ class BenchmarkRunner:
         """
         provider_name = client.name
         model_name = client.config.model
-
-        tps_results = []
-        all_token_details = []
-        elapsed_times = []
-        token_counts = []
-
         # Create tasks for all attempts
         tasks = []
         for i in range(attempts):
@@ -174,49 +166,21 @@ class BenchmarkRunner:
         for f in tqdm.as_completed(
             tasks, total=len(tasks), desc=f"Benchmarking {provider_name} {model_name}"
         ):
-            responses.append(await f)
-
-        # Process results
-        for i, (response_data, elapsed) in enumerate(responses):
-            elapsed_times.append(elapsed)
-
-            # Get detailed token counts
-            token_counts_dict = client.extract_detailed_token_counts(response_data)
-            output_token_counts = token_counts_dict["completion_tokens"]
-
-            all_token_details.append(token_counts_dict)
-
-            # Calculate tokens per second
-            if elapsed > 0:
-                tps_results.append(output_token_counts / elapsed)
-
-            # Track token counts
-            token_counts.append(output_token_counts)
-            logger.debug(
-                f"Attempt {i + 1} completed: {output_token_counts} tokens in {elapsed:.2f}s"
-            )
-
-        # Calculate statistics
-        result = BenchmarkResult(
-            provider_name=provider_name,
-            model_name=client.config.model,
-            run_id=self.run_id,
-            average_tps=statistics.mean(tps_results),
-            median_tps=statistics.median(tps_results),
-            total_tokens=sum(token_counts),
-            total_elapsed=sum(elapsed_times),
-            token_details=all_token_details,
-            elapsed_times=elapsed_times,
-        )
-
-        return result
+            try:
+                result = await f
+                responses.append(result)
+            except Exception as e:
+                logger.error(
+                    f"Error benchmarking {provider_name} and {model_name}: {str(e)}"
+                )
+        return responses
 
     async def run_async(
         self,
         attempts: int,
         prompt_mode: str = "decode",
         max_tokens: Optional[int] = None,
-    ) -> pd.DataFrame:
+    ) -> None:
         """
         Run benchmarks for all configured providers asynchronously.
 
@@ -240,16 +204,16 @@ class BenchmarkRunner:
         else:
             logger.info("Using standard decoding prompt")
 
-        # Generate the prompt once to be consistent across providers
-        prompt = self.get_prompt(prompt_mode)
-
         # Run benchmarks for each provider
         tasks = []
+        prompts = [self.get_prompt(prompt_mode) for _ in range(attempts)]
         for provider_config in self.providers:
             try:
                 client = get_client(provider_config, self.run_id)
                 tasks.append(
-                    self.benchmark_provider_async(client, prompt, attempts, max_tokens)
+                    self.benchmark_provider_async(
+                        client, random.choice(prompts), attempts, max_tokens
+                    )
                 )
             except Exception as e:
                 logger.error(
@@ -257,22 +221,6 @@ class BenchmarkRunner:
                 )
 
         # Wait for all benchmarks to complete
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-        output_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                logger.error(
-                    f"Error benchmarking {self.providers[i].name}: {str(result)}"
-                )
-            else:
-                # Cast the result to BenchmarkResult since we've checked it's not an exception
-                benchmark_result = cast(BenchmarkResult, result)
-                output_results.append(benchmark_result)
-        self.results = output_results
-        # Save final combined log
-        final_csv_file = f"data/results/all_requests_log_{self.run_id}.csv"
-        df = pd.DataFrame([asdict(result) for result in output_results])
-        df.to_csv(final_csv_file, index=False)
-        logger.info(f"Full request logs saved to: {final_csv_file}")
-        return df
+        logger.info(f"All benchmarks completed for this run {self.run_id}")
