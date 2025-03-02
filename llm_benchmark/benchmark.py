@@ -10,11 +10,14 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from tqdm.asyncio import tqdm
 
 from llm_benchmark.client import LLMClient, get_client
+from llm_benchmark.fetch_logs import fetch_logs
 from llm_benchmark.models import ProviderConfig
 
 # Set up logging
@@ -224,3 +227,17 @@ class BenchmarkRunner:
         await asyncio.gather(*tasks, return_exceptions=True)
 
         logger.info(f"All benchmarks completed for this run {self.run_id}")
+
+        logger.info(f"Fetching logs from cloudflare for this run {self.run_id}")
+        _, details = await fetch_logs(self.run_id)
+        output_parquet_path = f"data/cf/{self.run_id}/details.zstd.parquet"
+        ## make sure the directory exists
+        Path(output_parquet_path).parent.mkdir(parents=True, exist_ok=True)
+        # Write each detail as a separate JSON line (JSONL format)
+        details_rows = []
+        for detail in details:
+            if detail.metadata is not None:
+                detail.metadata = None
+            details_rows.append(detail.model_dump())
+        df = pd.DataFrame(details_rows)
+        df.to_parquet(output_parquet_path, compression="zstd", index=False)
