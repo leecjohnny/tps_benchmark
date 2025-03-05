@@ -75,7 +75,6 @@ class OpenAIConfig(ProviderConfig):
             "gpt-4",
             "gpt-3.5-turbo",
             "gpt-4.5-preview",
-            "gpt-4-32k",
         ]
         return [cls(model=model) for model in models]
 
@@ -154,7 +153,7 @@ class GoogleVertexConfig(ProviderConfig):
             "gemini-2.0-flash-lite",
             "gemini-2.0-flash",
             "gemini-2.0-pro-exp-02-05",
-            "gemini-2.0-flash-thinking-exp-01-21",
+            # "gemini-2.0-flash-thinking-exp-01-21",
         ]
         return [cls(model=model) for model in models]
 

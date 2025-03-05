@@ -209,7 +209,11 @@ class BenchmarkRunner:
 
         # Run benchmarks for each provider
         tasks = []
-        prompts = [self.get_prompt(prompt_mode) for _ in range(attempts)]
+        prompts = [
+            self.get_prompt(prompt_mode) for _ in range(attempts * len(self.providers))
+        ]
+        # check all prompts are different
+        assert len(prompts) == len(set(prompts)), "All prompts must be different"
         for provider_config in self.providers:
             try:
                 client = get_client(provider_config, self.run_id)
@@ -230,14 +234,15 @@ class BenchmarkRunner:
 
         logger.info(f"Fetching logs from cloudflare for this run {self.run_id}")
         _, details = await fetch_logs(self.run_id)
-        output_parquet_path = f"data/cf/{self.run_id}/details.zstd.parquet"
-        ## make sure the directory exists
-        Path(output_parquet_path).parent.mkdir(parents=True, exist_ok=True)
-        # Write each detail as a separate JSON line (JSONL format)
-        details_rows = []
-        for detail in details:
-            if detail.metadata is not None:
-                detail.metadata = None
-            details_rows.append(detail.model_dump())
-        df = pd.DataFrame(details_rows)
-        df.to_parquet(output_parquet_path, compression="zstd", index=False)
+        if details:
+            output_parquet_path = f"data/cf/{self.run_id}/details.zstd.parquet"
+            ## make sure the directory exists
+            Path(output_parquet_path).parent.mkdir(parents=True, exist_ok=True)
+            # Write each detail as a separate JSON line (JSONL format)
+            details_rows = []
+            for detail in details:
+                if detail.metadata is not None:
+                    detail.metadata = None
+                details_rows.append(detail.model_dump())
+            df = pd.DataFrame(details_rows)
+            df.to_parquet(output_parquet_path, compression="zstd", index=False)

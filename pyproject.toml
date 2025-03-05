@@ -29,4 +29,8 @@ dev = [
     "types-requests>=2.32.0.20241016",
     "pandas-stubs>=2.2.3.241126",
     "types-tqdm>=4.67.0.20250228",
+    "ipykernel>=6.29.5",
+    "numpy>=2.2.3",
+    "matplotlib>=3.10.1",
+    "seaborn>=0.13.2",
 ]
