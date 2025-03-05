@@ -114,11 +114,7 @@ class CloudflareGatewayClient(LLMClient):
             f"https://gateway.ai.cloudflare.com/v1/{self.account_id}/{self.gateway_id}"
         )
         self.auth_token = os.environ.get(config.auth_env, "")
-
-        if not self.auth_token:
-            logger.warning(
-                f"No API token found for {config.name} (env: {config.auth_env})"
-            )
+        assert self.auth_token, f"No API token found for {config.name} (env: {config.auth_env}) (env: {os.environ.get(config.auth_env, '')})"
 
     async def call_async(
         self, prompt: str, max_tokens: Optional[int] = None

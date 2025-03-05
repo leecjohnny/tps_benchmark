@@ -20,7 +20,7 @@ logging.basicConfig(
 load_dotenv()
 client = AsyncCloudflare(
     api_token=os.environ["WORKERS_AI_TOKEN"],
-    max_retries=20,
+    max_retries=20,  ## cloudflare will 429 for too many requests
 )
 ACCOUNT_ID = os.environ["CLOUDFLARE_ACCOUNT_ID"]
 GATEWAY_ID = os.environ["CLOUDFLARE_GATEWAY_ID"]
@@ -78,12 +78,29 @@ async def fetch_logs(run_id: Optional[str] = None):
         all_logs.extend(result.result)
 
     # Fetch details for each log
-    details_tasks = [fetch_log_details(log.id) for log in all_logs]
+    ## if logs are more than 750, process in batches of 750, and wait 2 minutes between batches
     details_results = []
-    for task in tqdm.as_completed(details_tasks, desc="Fetching log details"):
-        result = await task
-        details_results.append(result)
-
+    batch_size = 350
+    wait_time = 90
+    if len(all_logs) > batch_size:
+        for i in range(0, len(all_logs), batch_size):
+            batch_tasks = [
+                fetch_log_details(log.id) for log in all_logs[i : i + batch_size]
+            ]
+            for task in tqdm.as_completed(
+                batch_tasks,
+                desc=f"Fetching log details batch {i // batch_size + 1}/{(len(all_logs) + batch_size - 1) // batch_size}",
+            ):
+                result = await task
+                details_results.append(result)
+            if i + batch_size < len(all_logs):  # Don't sleep after the last batch
+                logging.info(f"Sleeping for {wait_time} seconds before next batch...")
+                await asyncio.sleep(wait_time)
+    else:
+        details_tasks = [fetch_log_details(log.id) for log in all_logs]
+        for task in tqdm.as_completed(details_tasks, desc="Fetching log details"):
+            result = await task
+            details_results.append(result)
     return all_logs, details_results
 
 
@@ -114,6 +131,14 @@ def main(run_id: Optional[str] = None):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run_id", type=str, required=False)
+    ## make aprg grouup --run_id or --all
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--run_id", type=str, help="The run id to fetch logs for")
+    group.add_argument(
+        "--all", action="store_true", help="Fetch all logs", default=False
+    )
     args = parser.parse_args()
-    main(args.run_id)
+    if args.all:
+        main()
+    else:
+        main(args.run_id)
